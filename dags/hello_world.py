@@ -1,13 +1,17 @@
 from datetime import datetime
 from airflow import DAG
 from airflow.operators.python_operator import PythonOperator
-
+from discordwebhook import Discord
 import cfscrape
 import json
 import time
 import colorama
 from datetime import datetime
 from bs4 import BeautifulSoup
+
+from types import ModuleType
+from inspect import currentframe, getmodule
+import sys
 
 colorama.init()
 
@@ -28,13 +32,13 @@ WEBHOOKS = [
 ]
 
 COUNTRY_LINKS = {
-    'IT': 'https://www.zalando.it/release-calendar/sneakers-uomo/',
-    'UK': 'https://www.zalando.co.uk/release-calendar/mens-shoes-sneakers/'
+    'IT': 'https://www.zalando.es/calzado-hombre/adidas.nike/',
+    'UK': 'https://www.zalando.es/calzado-hombre/adidas.nike/'
 }
 
 COUNTRY_BASE_URL = {
-    'IT': 'https://www.zalando.it/',
-    'UK': 'https://www.zalando.co.uk/'
+    'IT': 'https://www.zalando.es/calzado-hombre/adidas.nike/',
+    'UK': 'https://www.zalando.es/calzado-hombre/adidas.nike/'
 }
 
 LOGGING_COLORS = {
@@ -148,49 +152,43 @@ def get_page_data(countryCode):
         {'countryCode': countryCode})
     return {'error': 'Invalid Country'}
 
-
 def filter_json(content):
-    print("-filter_articles-")
-    bs = BeautifulSoup(content, 'html.parser')
-    foundScripts = bs.find_all('script')
+    vectorArticulos = []
+    soup = BeautifulSoup(content, "html.parser")
 
-    for script in foundScripts:
-        print("-len(script.contents)-")
-        print(len(script.contents))
-        if len(script.contents) == 1:
-            print("-script.contents[0].startswith('window.feedPreloadedState=')-")
-            print(script.contents[0].startswith('window.feedPreloadedState='))
-            print("-script.contents[0]-")
-            print(script.contents[0])
-            #if script.contents[0].startswith('window.feedPreloadedState='):
-            if script.contents[0].startswith('{"enrichedEntity":'):
-                script = script.contents[0]
-                script = script[26:]
-                script = script[:-1]
-                print("-JSON_TO_TABLE(script)-")
-                print(JSON_TO_TABLE(script))
-                print("-JSON_TO_TABLE(script)['feed']-")
-                print(JSON_TO_TABLE(script)['feed'])
-                print("-JSON_TO_TABLE(script)['feed']['items']-")
-                print(JSON_TO_TABLE(script)['feed']['items'])
-                return JSON_TO_TABLE(script)['feed']['items']
+    # Encontrar todos los elementos que contienen información de los productos
+    product_items = soup.find_all("article", class_="z5x6ht _0xLoFW JT3_zV mo6ZnF _78xIQ-")
+    
+    # Iterar sobre cada producto y extraer los datos relevantes
+    for item in product_items:
+        # Extraer el nombre del producto
+        name = item.find("h3", class_="_6zR8Lt lystZ1 FxZV-M _4F506m ZkIJC- r9BRio qXofat EKabf7 nBq1-s _2MyPg2")
+        
+        # Extraer el precio del producto
+        price = item.find("span", class_="ZiDB59 r9BRio uVxVjw")
 
+        # Extraer los detalles del producto
+        detalles = item.find("h3", class_="KxHAYs lystZ1 FxZV-M _4F506m ZkIJC- r9BRio qXofat EKabf7 nBq1-s _2MyPg2")
 
-def filter_articles(content):
-    print("-filter_articles-")
-    print(content)
-    for articlesList in content:
-        if articlesList['id'] == 'products':
-            return articlesList['articles']
+        if name != None and price != None and detalles != None:
+            name_cadena = name.text.strip()
+            price_cadena = price.text.strip()
+            detalles_cadena = detalles.text.strip()
+        
+            # Imprimir los datos del producto
+            print("-----------------------------producto----------------------------------")
+            print("Nombre: ", name_cadena)
+            print("Precio: ", price_cadena)
+            print("Detalles: ", detalles_cadena)
+            print("------------------------------------------------------------------------------")
 
-
-def filter_coming_soon(content):
-    comingSoonList = []
-    for article in content:
-        if article['availability']['comingSoon'] == True:
-            comingSoonList.append(article)
-    return comingSoonList
-
+            vectorArticulos.append({
+                "name": name_cadena,
+                "price": price_cadena,
+                "detalles": detalles_cadena
+            })
+    
+    return vectorArticulos
 
 def adjust_articles_info(content, countryCode):
     adjustedArticlesList = []
@@ -260,101 +258,35 @@ def send_message(content):
 
     for article in content:
 
-        stocks = get_product_stock(article['link'])
-
-        sizeString = ''
-        countryString = ''
-        stockString = ''
-        totalStock = 0
-
-        for size in stocks:
-            sizeString += size['size'] + '\n'
-            countryString += size['sizeCountry'] + '\n'
-            stockString += str(size['stock']) + '\n'
-            totalStock += size['stock']
-
-        data = {
-            "content": None,
-            "embeds": [
-                {
-                    "description": "[%s](%s)" % (article['productName'], article['link']),
-                    "color": None,
-                    "fields": [
-                        {
-                            "name": "Price",
-                            "value": article['currentPrice'],
-                            "inline": True
-                        },
-                        {
-                            "name": "Release Date",
-                            "value": article['releaseDate'],
-                            "inline": True
-                        },
-                        {
-                            "name": "Total Stock",
-                            "value": totalStock,
-                            "inline": True
-                        }
-                    ],
-                    "author": {
-                        "name": "Sneaker Drop",
-                        "url": article['link']
-                    },
-                    "thumbnail": {
-                        "url": article['imageUrl']
-                    }
-                },
-                {
-                    "color": None,
-                    "fields": [
-                        {
-                            "name": "Sizes",
-                            "value": sizeString,
-                            "inline": True
-                        },
-                        {
-                            "name": "Country",
-                            "value": countryString,
-                            "inline": True
-                        },
-                        {
-                            "name": "Stock",
-                            "value": stockString,
-                            "inline": True
-                        }
-                    ]
-                }
-            ],
-            "username": "᲼",
-            "avatar_url": "https://avatars.githubusercontent.com/u/1564818?s=280&v=4"
-        }
-
-        if len(stocks) == 0:
-            data['embeds'].remove(data['embeds'][1])
-            data['embeds'][0]['fields'][2]['value'] = 'UNKNOWN'
+        print("-ARTICULO-")
+        print(article)
+        print(article['name'])
 
         for webhook in WEBHOOKS:
 
-            log('LOG', 'Article Message Sent', {
-                'WEBHOOK': webhook, 'ARTICLE-ID': article['zalandoId']})
-            POST(webhook, json=data)
+            #log('LOG', 'Article Message Sent', {'WEBHOOK': webhook, 'ARTICLE-ID': article['name']})
+            cadena_mensaje = article['name'] + " - " + article['detalles'] + " - " + article['price']
+            #POST(webhook, content=cadena_mensaje)
+
+            discord = Discord(url=webhook)
+            discord.post(content=cadena_mensaje)
 
 
-oldArticles = load_external_articles()
+#oldArticles = load_external_articles()
 
 
 def print_hello():
-    print('¡Hola Mundodddddd!')
     global oldArticles
     country = 'IT'
     print("-data-")
     print(get_page_data(country))
     print("--------------------------")
-    articles = adjust_articles_info(filter_coming_soon(filter_articles(filter_json(get_page_data(country)))), country)
-    newArticles = compare_articles(articles)
-    send_message(newArticles)
-    save_external_articles(articles)
-    oldArticles = articles
+    #articles = adjust_articles_info(filter_coming_soon(filter_articles(filter_json(get_page_data(country)))), country)
+    articles = filter_json(get_page_data(country))
+    #newArticles = compare_articles(articles)
+    send_message(articles)
+    #save_external_articles(articles)
+    #oldArticles = articles
 
 
 
